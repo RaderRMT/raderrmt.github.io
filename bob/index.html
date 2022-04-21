@@ -21,7 +21,121 @@
                 </nav>
             </h1>
 
-            <h1>Bob</h1>
+            <h1>What is Bob?</h1>
+            <p>
+                Bob is a Replay Editor for the ReplayMod, a Minecraft mod to create videos such as timelapses or cinematics.
+                <br>
+                As Bob features it's own specialized and custom scripting language, only the sky is the limit.
+            </p>
+            <p>
+                So far, Bob is only available as a Lite version, as the custom scripting language hasn't been implemented yet.
+                <br>
+                This Lite version works on all Minecraft versions supported by the ReplayMod and can:
+
+                <ul>
+                    <li>Change the weather</li>
+                    <li>Change the time</li>
+                    <li>Remove the chat messages</li>
+                </ul>
+            </p>
+
+            <h1>History:</h1>
+            <p>
+                Bob started out as an experiment. I wanted to see if it was possible to change a username in a Replay.
+                <br>
+                It turned out to be possible, but I wanted to do more.
+                <br>
+                Replays are just a dump of the entire communication between the server and the client.
+                <br>
+                The ReplayMod then emulated a Minecraft server to replay the communication, so we can see what happened.
+            </p>
+
+            <h1>How it works:</h1>
+            <p>
+                 As I previously said, Replays are just a dump of the client-server communication.
+                 <br>
+                 What Bob edits is those network packets directly.
+            </p>
+            <p>
+                Let's use a real example so you know how it works, so let's change the time on a 1.18.2 Replay.
+                <br>
+                To understand how to change the time, we have to understand how the time is sent to the client.
+                <br>
+                As it turns out, the server is sending a <a href="https://wiki.vg/Protocol#Time_Update">Time Packet</a>. Here is its format:
+
+                <pre style="line-height: normal;">
+        +-----------------------------------------+
+        |       Packet ID: 0x59 (89 decimal)      |
+        +-------------+------+--------------------+
+        |     Name    | Type |     Description    |
+        +-------------+------+--------------------+
+        | World Age   | Long | World age in ticks |
+        +-------------+------+--------------------+
+        | Time of Day | Long | The time in ticks  |
+        +-------------+------+--------------------+
+                </pre>
+
+                The time of day is exactly what we want to edit, and we know how much bytes it takes (a long is stored on 8 bytes, and it's also defined in the <a href="https://wiki.vg/Protocol#Data_types">Data Types</a> section of wiki.vg)
+                <br>
+                Those Time Update packets are sent every 20 ticks.
+                <br><br>
+
+                Let's look at it's data in a hex editor:
+                <br>
+                <img src="../assets/images/bob/time_update_packet_nothing.png">
+                <br><br>
+                With ImHex, I can highlight certain block of data to make reading hexadecimal data easier:
+                <br>
+                <img src="../assets/images/bob/time_update_packet_data_highlight.png">
+                <br><br>
+                Let's see what those values mean.<br>
+                When highlighting the first 8 bytes (the world age) and telling ImHex to treat the data as big endian, we get this:
+                <br>
+                <img src="../assets/images/bob/time_update_packet_selecting_world_time.png">
+                <br><br>
+                A long is 64 bits, so the value we get from uint64_t is 112800 (uint64_t stands for "unsigned 64 bit integer type"). 112800 ticks corresponds to 94 mins.
+                <br>
+                Now let's check the second set of 8 bytes (the time of day in ticks), we get this:
+                <br>
+                <img src="../assets/images/bob/time_update_packet_selecting_time_of_day.png">
+                <br><br>
+                This value has to be treated as a signed number, so we have to look at int64_t. Its value is -18000 ticks.<br>
+                As we can see, this value is negative. This means the sky won't automatically move for 20 ticks.<br>
+                This is used when the doDaylightCycle gamerule is set to false.<br>
+                <br>
+                Now, if you tell Bob to edit the time in a Replay, the steps it'll follow are as followed:
+                <ul>
+                    <li>Find the correct packet</li>
+                    <li>Ignore the first 8 bytes</li>
+                    <li>Write the new time value, while discarding the old one</li>
+                </ul>
+
+                Instead of hardcoding those steps, I created a structure language, to tell Bob how to read and write packets.<br>
+                This is the structure of the time update packet:<br>
+                <pre>
+        packet "time_update" {
+            long "world_age";
+            long "time_of_day";
+        }
+                </pre>
+
+                This Packet Structure Language file (neatly called PSL) is fed into a <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/lexer/Lexer.java">Lexer</a> that will generate a list of <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/tokens/Token.java">Token</a> while doing some error checking.
+                <br>
+                <br>
+
+                After that, the list of token is fed into a <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/lexer/Validator.java">Validator</a> that will do further error checking such as type checking and variable scope analysis.
+                <br>
+                <br>
+                If the validator found no issues, the list of tokens is then fed into a <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/packets/definition/PacketDefinitionFactory.java">PacketDefinitionFactory</a> that will convert the list of tokens into a parse tree (a <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/packets/definition/PacketDefinition.java">PacketDefinition</a> in my code). The Validator and the PacketDefinitionFactory form what's called a <a href="https://en.wikipedia.org/wiki/Parser">Parser</a>.
+                <br>
+                <br>
+                This definition is an intermediary between the PSL file and the values Bob will edit. The definition will be used in the <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/packets/serialization/PacketDeserializer.java">PacketDeserializer</a> to turn the bytes to a format Bob can understand and edit, and in the <a href="https://github.com/RaderRMT/Bob/blob/master/src/main/java/fr/rader/psl/packets/serialization/PacketSerializer.java">PacketSerializer</a> to write the bytes from the format Bob can understand.
+
+                <br><br>
+                With this, if you tell Bob to edit the "time_of_day" value of a "time_update" packet, it'll know what to edit, and how.
+                <br>
+                With this technique, it's also very easy to update Bob to a new Minecraft protocol when a new version releases. Everything is hand-made and no libraries are used.
+            </p>
         </div>
     </body>
 </html>
